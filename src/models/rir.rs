@@ -63,51 +63,26 @@ impl RIRDataFetcher {
 
     /// 带重试的 HTTP 下载
     ///
-    /// delegated 文件可能较大，因此这里按 chunk 读取并周期性输出进度日志
+    /// delegated 文件可能较大，因此这里只设置连接和单次读取超时，不设置整个
+    /// 请求总超时，避免慢速链路在持续读取时被整体超时中断
     async fn download_with_retry(&self, url: &str) -> anyhow::Result<String> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))
-            .timeout(Duration::from_secs(self.timeout))
-            .no_gzip()
+            .read_timeout(Duration::from_secs(self.timeout))
+            .redirect(reqwest::redirect::Policy::limited(10))
             .build()?;
 
         let mut last_error = None;
 
         for attempt in 1..=self.retry {
             log::info!("下载请求 (尝试 {}/{})...", attempt, self.retry);
-            match client.get(url).send().await {
-                Ok(mut resp) => {
-                    if resp.status().is_success() {
-                        log::info!("收到响应, 正在读取数据...");
-                        let mut buf = String::new();
-                        let mut total = 0u64;
-                        loop {
-                            match resp.chunk().await {
-                                Ok(Some(chunk)) => {
-                                    total += chunk.len() as u64;
-                                    buf.push_str(&String::from_utf8_lossy(&chunk));
-                                    if total.is_multiple_of(1024 * 1024) {
-                                        log::info!("已读取 {} MB...", total / 1024 / 1024);
-                                    }
-                                }
-                                Ok(None) => {
-                                    log::info!("数据读取完成, 共 {} bytes", total);
-                                    return Ok(buf);
-                                }
-                                Err(e) => {
-                                    last_error = Some(anyhow::anyhow!("{}", e));
-                                    log::warn!("读取响应体失败: {}", e);
-                                    break;
-                                }
-                            }
-                        }
-                    } else {
-                        last_error = Some(anyhow::anyhow!("HTTP {}: {}", resp.status(), url));
+            for candidate_url in Self::download_urls(url) {
+                match Self::download_once(&client, &candidate_url).await {
+                    Ok(data) => return Ok(data),
+                    Err(e) => {
+                        log::warn!("下载失败: {} - {}", candidate_url, e);
+                        last_error = Some(e);
                     }
-                }
-                Err(e) => {
-                    last_error = Some(anyhow::anyhow!("{}", e));
-                    log::warn!("下载请求失败: {}", e);
                 }
             }
 
@@ -118,6 +93,45 @@ impl RIRDataFetcher {
         }
 
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!("下载失败")))
+    }
+
+    /// 生成下载候选地址：优先使用配置的原始 URL，HTTP 失败时再尝试 HTTPS。
+    fn download_urls(url: &str) -> Vec<String> {
+        let mut urls = vec![url.to_string()];
+        if let Some(rest) = url.strip_prefix("http://") {
+            urls.push(format!("https://{}", rest));
+        }
+        urls
+    }
+
+    /// 执行单次下载，reqwest 会自动跟随 HTTP 到 HTTPS 的重定向。
+    async fn download_once(client: &reqwest::Client, url: &str) -> anyhow::Result<String> {
+        log::info!("请求 RIR 数据: {}", url);
+        let mut resp = client.get(url).send().await?;
+        let final_url = resp.url().clone();
+
+        if !resp.status().is_success() {
+            anyhow::bail!("HTTP {}: {}", resp.status(), final_url);
+        }
+
+        if final_url.as_str() != url {
+            log::info!("下载地址已跳转到: {}", final_url);
+        }
+
+        log::info!("收到响应, 正在读取数据...");
+        let mut buf = String::new();
+        let mut total = 0u64;
+
+        while let Some(chunk) = resp.chunk().await? {
+            total += chunk.len() as u64;
+            buf.push_str(&String::from_utf8_lossy(&chunk));
+            if total.is_multiple_of(1024 * 1024) {
+                log::info!("已读取 {} MB...", total / 1024 / 1024);
+            }
+        }
+
+        log::info!("数据读取完成, 共 {} bytes", total);
+        Ok(buf)
     }
 }
 
