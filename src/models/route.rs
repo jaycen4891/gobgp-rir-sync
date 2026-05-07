@@ -12,16 +12,17 @@ pub struct RouteManager {
 }
 
 impl RouteManager {
+    /// 使用运行时配置创建路由管理器
     pub fn new(settings: Settings) -> Self {
         Self { settings }
     }
 
     /// 批量同步路由：先删除旧路由，再添加新路由（带团体字）
-    /// entries: HashMap<前缀, 团体字>
+    /// 参数使用 `HashMap<前缀, 团体字>`；删除时团体字只用于选择当时注入的下一跳
     pub async fn batch_sync(
         &self,
         to_add: &HashMap<String, String>,
-        to_del: &[String],
+        to_del: &HashMap<String, String>,
         tag: &str,
     ) -> (u32, u32) {
         let mut ok = 0u32;
@@ -29,9 +30,20 @@ impl RouteManager {
 
         // 删除旧路由
         if !to_del.is_empty() {
-            let result =
-                CommandExecutor::del_routes(to_del, &self.settings, tag, self.settings.concurrency)
-                    .await;
+            let entries: Vec<RouteEntry> = to_del
+                .iter()
+                .map(|(prefix, community)| RouteEntry {
+                    prefix: prefix.clone(),
+                    community: community.clone(),
+                })
+                .collect();
+            let result = CommandExecutor::del_routes(
+                &entries,
+                &self.settings,
+                tag,
+                self.settings.concurrency,
+            )
+            .await;
             ok += result.ok;
             fail += result.fail;
         }

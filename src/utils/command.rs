@@ -1,11 +1,15 @@
-use std::process::Command;
+use prost::Message;
+use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
+use tonic::transport::Channel;
 
 use crate::config::Settings;
+use crate::gobgp::apipb;
+use apipb::gobgp_api_client::GobgpApiClient;
 
-/// 并发执行 GoBGP 命令的返回结果
+/// 并发执行 GoBGP API 的返回结果
 pub struct ConcurrencyResult {
     pub ok: u32,
     pub fail: u32,
@@ -17,11 +21,14 @@ pub struct RouteEntry {
     pub community: String,
 }
 
-/// GoBGP命令执行器
+/// GoBGP API 执行器
 pub struct CommandExecutor;
 
 impl CommandExecutor {
-    /// 并发添加路由（带团体字），返回 (成功数, 失败数)
+    /// 并发添加路由
+    ///
+    /// 每条路由都携带快照中计算出的团体字；下一跳会按团体字中的国家/地区数字码
+    /// 匹配覆盖表，未命中时使用默认下一跳
     pub async fn add_routes(
         entries: &[RouteEntry],
         settings: &Settings,
@@ -31,7 +38,15 @@ impl CommandExecutor {
         let total = entries.len();
         let semaphore = Arc::new(Semaphore::new(concurrency));
         let mut handles: Vec<JoinHandle<bool>> = Vec::with_capacity(total);
-        let gobgp_path = settings.gobgp_path.clone();
+        let client = match Self::connect(settings, tag).await {
+            Some(client) => client,
+            None => {
+                return ConcurrencyResult {
+                    ok: 0,
+                    fail: total as u32,
+                }
+            }
+        };
         let started = std::time::Instant::now();
 
         log::info!(
@@ -41,30 +56,24 @@ impl CommandExecutor {
             concurrency
         );
 
+        let mut acquire_fail = 0u32;
         for entry in entries {
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let permit = match semaphore.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(e) => {
+                    log::error!("{} | 添加任务获取并发许可失败: {}", tag, e);
+                    acquire_fail += 1;
+                    continue;
+                }
+            };
             let p = entry.prefix.clone();
             let c = entry.community.clone();
-            let path = gobgp_path.clone();
+            let next_hop = settings.next_hop_for_community(&c, p.contains(':'));
+            let mut route_client = client.clone();
             let t = tag.to_string();
 
             handles.push(tokio::spawn(async move {
-                let result = if c.is_empty() {
-                    // 无团体字
-                    let args = if p.contains(':') {
-                        vec!["global", "rib", "add", "-a", "ipv6", &p]
-                    } else {
-                        vec!["global", "rib", "add", "-a", "ipv4", &p]
-                    };
-                    Self::execute_command(&path, &args)
-                } else {
-                    let args = if p.contains(':') {
-                        vec!["global", "rib", "add", "-a", "ipv6", &p, "community", &c]
-                    } else {
-                        vec!["global", "rib", "add", "-a", "ipv4", &p, "community", &c]
-                    };
-                    Self::execute_command(&path, &args)
-                };
+                let result = Self::add_route(&mut route_client, &p, &c, &next_hop).await;
 
                 if result {
                     log::debug!("{} | 添加成功: {} ({})", t, p, c);
@@ -77,7 +86,7 @@ impl CommandExecutor {
         }
 
         let mut ok = 0u32;
-        let mut fail = 0u32;
+        let mut fail = acquire_fail;
 
         for handle in handles.into_iter() {
             match handle.await {
@@ -109,79 +118,60 @@ impl CommandExecutor {
         ConcurrencyResult { ok, fail }
     }
 
-    /// 并发删除路由，返回 (成功数, 失败数)
+    /// 并发删除路由
+    ///
+    /// 删除时不携带团体字，避免 GoBGP 因属性匹配过严导致路径无法移除；
+    /// 历史团体字只用于选择当时注入路由使用的下一跳
     pub async fn del_routes(
-        prefixes: &[String],
+        entries: &[RouteEntry],
         settings: &Settings,
         tag: &str,
         concurrency: usize,
-    ) -> ConcurrencyResult {
-        Self::execute_batch(prefixes, settings, tag, concurrency, true).await
-    }
-
-    /// 批量并发执行
-    async fn execute_batch(
-        prefixes: &[String],
-        settings: &Settings,
-        tag: &str,
-        concurrency: usize,
-        is_del: bool,
     ) -> ConcurrencyResult {
         let semaphore = Arc::new(Semaphore::new(concurrency));
-        let total = prefixes.len();
+        let total = entries.len();
         let mut handles: Vec<JoinHandle<bool>> = Vec::with_capacity(total);
-        let gobgp_path = settings.gobgp_path.clone();
+        let client = match Self::connect(settings, tag).await {
+            Some(client) => client,
+            None => {
+                return ConcurrencyResult {
+                    ok: 0,
+                    fail: total as u32,
+                }
+            }
+        };
         let started = std::time::Instant::now();
 
-        let action = if is_del { "删除" } else { "添加" };
         log::info!(
-            "{} | {}开始执行, 共 {} 条, 并发 {}",
+            "{} | 删除开始执行, 共 {} 条, 并发 {}",
             tag,
-            action,
             total,
             concurrency
         );
 
-        for prefix in prefixes {
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
-            let p = prefix.clone();
-            let path = gobgp_path.clone();
+        let mut acquire_fail = 0u32;
+        for entry in entries {
+            let permit = match semaphore.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(e) => {
+                    log::error!("{} | 删除任务获取并发许可失败: {}", tag, e);
+                    acquire_fail += 1;
+                    continue;
+                }
+            };
+            let p = entry.prefix.clone();
+            let c = entry.community.clone();
+            let next_hop = settings.next_hop_for_community(&c, p.contains(':'));
+            let mut route_client = client.clone();
             let t = tag.to_string();
-            let a = action.to_string();
 
             handles.push(tokio::spawn(async move {
-                let result = if p.contains(':') {
-                    // IPv6
-                    Self::execute_command(
-                        &path,
-                        &[
-                            "global",
-                            "rib",
-                            if is_del { "del" } else { "add" },
-                            "-a",
-                            "ipv6",
-                            &p,
-                        ],
-                    )
-                } else {
-                    // IPv4
-                    Self::execute_command(
-                        &path,
-                        &[
-                            "global",
-                            "rib",
-                            if is_del { "del" } else { "add" },
-                            "-a",
-                            "ipv4",
-                            &p,
-                        ],
-                    )
-                };
+                let result = Self::delete_route(&mut route_client, &p, &next_hop).await;
 
                 if result {
-                    log::debug!("{} | {}成功: {}", t, a, p);
+                    log::debug!("{} | 删除成功: {} ({})", t, p, c);
                 } else {
-                    log::warn!("{} | {}失败: {}", t, a, p);
+                    log::warn!("{} | 删除失败: {} ({})", t, p, c);
                 }
                 drop(permit);
                 result
@@ -189,7 +179,7 @@ impl CommandExecutor {
         }
 
         let mut ok = 0u32;
-        let mut fail = 0u32;
+        let mut fail = acquire_fail;
 
         for handle in handles.into_iter() {
             match handle.await {
@@ -209,9 +199,8 @@ impl CommandExecutor {
             0.0
         };
         log::info!(
-            "{} | {}完成 — 成功 {}, 失败 {}, 总数 {}, 耗时 {:.1}s, 平均速率 {:.0}条/s",
+            "{} | 删除完成 — 成功 {}, 失败 {}, 总数 {}, 耗时 {:.1}s, 平均速率 {:.0}条/s",
             tag,
-            action,
             ok,
             fail,
             total,
@@ -222,25 +211,177 @@ impl CommandExecutor {
         ConcurrencyResult { ok, fail }
     }
 
-    /// 执行单条命令（同步，在 blocking 线程中运行）
-    fn execute_command(gobgp_path: &str, args: &[&str]) -> bool {
-        match Command::new(gobgp_path).args(args).output() {
-            Ok(output) => {
-                if output.status.success() {
-                    true
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    log::error!("命令执行失败: {} {:?}", gobgp_path, args);
-                    if !stderr.trim().is_empty() {
-                        log::error!("错误详情: {}", stderr.trim());
-                    }
-                    false
-                }
-            }
+    /// 建立 GoBGP gRPC 连接；连接失败时由调用方把整批任务记为失败
+    async fn connect(settings: &Settings, tag: &str) -> Option<GobgpApiClient<Channel>> {
+        match GobgpApiClient::connect(settings.gobgp_api_addr()).await {
+            Ok(client) => Some(client),
             Err(e) => {
-                log::error!("执行命令异常: {} {:?} - {}", gobgp_path, args, e);
+                log::error!("{} | 连接 GoBGP API 失败: {}", tag, e);
+                None
+            }
+        }
+    }
+
+    /// 添加单条路由到 Global RIB
+    async fn add_route(
+        client: &mut GobgpApiClient<Channel>,
+        prefix: &str,
+        community: &str,
+        next_hop: &str,
+    ) -> bool {
+        let path = match Self::build_path(prefix, community, next_hop) {
+            Ok(path) => path,
+            Err(e) => {
+                log::error!("构造添加路由请求失败: {} - {}", prefix, e);
+                return false;
+            }
+        };
+
+        let request = apipb::AddPathRequest {
+            table_type: apipb::TableType::Global as i32,
+            vrf_id: String::new(),
+            path: Some(path),
+        };
+
+        match client.add_path(request).await {
+            Ok(_) => true,
+            Err(e) => {
+                log::error!("GoBGP API 添加路由失败: {} - {}", prefix, e);
                 false
             }
         }
+    }
+
+    /// 从 Global RIB 删除单条路由
+    ///
+    /// `uuid` 留空，依靠 prefix/family/next-hop 删除；删除 Path 不携带团体字
+    async fn delete_route(
+        client: &mut GobgpApiClient<Channel>,
+        prefix: &str,
+        next_hop: &str,
+    ) -> bool {
+        let path = match Self::build_path(prefix, "", next_hop) {
+            Ok(path) => path,
+            Err(e) => {
+                log::error!("构造删除路由请求失败: {} - {}", prefix, e);
+                return false;
+            }
+        };
+
+        let request = apipb::DeletePathRequest {
+            table_type: apipb::TableType::Global as i32,
+            vrf_id: String::new(),
+            family: path.family.clone(),
+            path: Some(path),
+            uuid: Vec::new(),
+        };
+
+        match client.delete_path(request).await {
+            Ok(_) => true,
+            Err(e) => {
+                log::error!("GoBGP API 删除路由失败: {} - {}", prefix, e);
+                false
+            }
+        }
+    }
+
+    /// 构造 GoBGP v3 API 需要的 Path
+    fn build_path(prefix: &str, community: &str, next_hop: &str) -> anyhow::Result<apipb::Path> {
+        let (ip, prefix_len) = Self::parse_cidr(prefix)?;
+        let is_ipv6 = matches!(ip, IpAddr::V6(_));
+        let afi = if is_ipv6 {
+            apipb::family::Afi::Ip6
+        } else {
+            apipb::family::Afi::Ip
+        };
+
+        let mut pattrs = vec![Self::encode_any(
+            "apipb.OriginAttribute",
+            &apipb::OriginAttribute { origin: 0 },
+        )?];
+
+        let family = apipb::Family {
+            afi: afi as i32,
+            safi: apipb::family::Safi::Unicast as i32,
+        };
+        let nlri = Self::encode_any(
+            "apipb.IPAddressPrefix",
+            &apipb::IpAddressPrefix {
+                prefix_len,
+                prefix: ip.to_string(),
+            },
+        )?;
+
+        pattrs.push(Self::encode_any(
+            "apipb.NextHopAttribute",
+            &apipb::NextHopAttribute {
+                next_hop: next_hop.to_string(),
+            },
+        )?);
+
+        if !community.trim().is_empty() {
+            pattrs.push(Self::encode_any(
+                "apipb.CommunitiesAttribute",
+                &apipb::CommunitiesAttribute {
+                    communities: vec![Self::community_to_u32(community)?],
+                },
+            )?);
+        }
+
+        Ok(apipb::Path {
+            nlri: Some(nlri),
+            pattrs,
+            is_withdraw: false,
+            no_implicit_withdraw: false,
+            family: Some(family),
+        })
+    }
+
+    /// 将 prost 消息编码为 `google.protobuf.Any`
+    fn encode_any<M: Message>(
+        type_name: &str,
+        message: &M,
+    ) -> anyhow::Result<apipb::google::protobuf::Any> {
+        let mut value = Vec::new();
+        message.encode(&mut value)?;
+        Ok(apipb::google::protobuf::Any {
+            type_url: format!("type.googleapis.com/{}", type_name),
+            value,
+        })
+    }
+
+    /// 将 `ASN:VALUE` 格式的标准 community 转为 32-bit 整数
+    fn community_to_u32(community: &str) -> anyhow::Result<u32> {
+        let (asn, value) = community
+            .split_once(':')
+            .ok_or_else(|| anyhow::anyhow!("community 必须是 <asn>:<value> 格式"))?;
+        let asn: u32 = asn.parse()?;
+        let value: u32 = value.parse()?;
+
+        if asn > u16::MAX as u32 || value > u16::MAX as u32 {
+            anyhow::bail!("标准 community 每段必须在 0..=65535 范围内");
+        }
+
+        Ok((asn << 16) | value)
+    }
+
+    /// 解析并校验 CIDR 前缀
+    fn parse_cidr(prefix: &str) -> anyhow::Result<(IpAddr, u32)> {
+        let (ip, prefix_len) = prefix
+            .split_once('/')
+            .ok_or_else(|| anyhow::anyhow!("路由前缀必须是 CIDR 格式"))?;
+        let ip: IpAddr = ip.parse()?;
+        let prefix_len: u32 = prefix_len.parse()?;
+
+        let max_len = match ip {
+            IpAddr::V4(_) => 32,
+            IpAddr::V6(_) => 128,
+        };
+
+        if prefix_len > max_len {
+            anyhow::bail!("前缀长度 {} 超出最大值 {}", prefix_len, max_len);
+        }
+
+        Ok((ip, prefix_len))
     }
 }

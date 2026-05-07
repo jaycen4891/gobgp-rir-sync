@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
 use clap::Parser;
@@ -25,9 +26,29 @@ pub struct CliArgs {
     #[arg(short = 's', long = "sync-time")]
     pub sync_time: Option<String>,
 
-    /// gobgp 可执行文件路径
-    #[arg(short = 'g', long = "gobgp-path")]
-    pub gobgp_path: Option<String>,
+    /// GoBGP gRPC API 地址
+    #[arg(long = "gobgp-api-host")]
+    pub gobgp_api_host: Option<String>,
+
+    /// GoBGP gRPC API 端口
+    #[arg(long = "gobgp-api-port")]
+    pub gobgp_api_port: Option<u16>,
+
+    /// GoBGP 注入 IPv4 路由时使用的下一跳
+    #[arg(long = "gobgp-nexthop-ipv4")]
+    pub gobgp_nexthop_ipv4: Option<String>,
+
+    /// GoBGP 注入 IPv6 路由时使用的下一跳
+    #[arg(long = "gobgp-nexthop-ipv6")]
+    pub gobgp_nexthop_ipv6: Option<String>,
+
+    /// 按国家/地区简写覆盖 IPv4 下一跳，格式: CN=198.19.0.254
+    #[arg(long = "community-nexthop-ipv4", value_name = "COUNTRY=NEXTHOP")]
+    pub community_nexthop_ipv4: Vec<String>,
+
+    /// 按国家/地区简写覆盖 IPv6 下一跳，格式: CN=2001:db8::fe
+    #[arg(long = "community-nexthop-ipv6", value_name = "COUNTRY=NEXTHOP")]
+    pub community_nexthop_ipv6: Vec<String>,
 
     /// 日志文件路径 (默认: ./gobgp_sync.log)
     #[arg(short = 'l', long = "log-file")]
@@ -57,7 +78,12 @@ pub struct SettingsConfig {
     pub ip_version: Option<String>,
     pub country_code: Option<String>,
     pub sync_time: Option<String>,
-    pub gobgp_path: Option<String>,
+    pub gobgp_api_host: Option<String>,
+    pub gobgp_api_port: Option<u16>,
+    pub gobgp_nexthop_ipv4: Option<String>,
+    pub gobgp_nexthop_ipv6: Option<String>,
+    pub community_nexthop_ipv4: Option<HashMap<String, String>>,
+    pub community_nexthop_ipv6: Option<HashMap<String, String>>,
     pub log_file: Option<String>,
     pub snapshot_dir: Option<String>,
     pub community_prefix: Option<String>,
@@ -70,7 +96,12 @@ pub struct Settings {
     pub ip_version: IpVersion,
     pub country_code: String,
     pub sync_time: String,
-    pub gobgp_path: String,
+    pub gobgp_api_host: String,
+    pub gobgp_api_port: u16,
+    pub gobgp_nexthop_ipv4: String,
+    pub gobgp_nexthop_ipv6: String,
+    pub community_nexthop_ipv4: HashMap<String, String>,
+    pub community_nexthop_ipv6: HashMap<String, String>,
     pub log_file: String,
     pub snapshot_dir: String,
     pub snapshot_ipv4_file: String,
@@ -122,7 +153,12 @@ impl Settings {
             ip_version: IpVersion::Dual,
             country_code: "CN".to_string(),
             sync_time: "02:00".to_string(),
-            gobgp_path: "/usr/local/bin/gobgp".to_string(),
+            gobgp_api_host: "127.0.0.1".to_string(),
+            gobgp_api_port: 50051,
+            gobgp_nexthop_ipv4: "0.0.0.0".to_string(),
+            gobgp_nexthop_ipv6: "::".to_string(),
+            community_nexthop_ipv4: HashMap::new(),
+            community_nexthop_ipv6: HashMap::new(),
             log_file: format!("{}/gobgp_sync.log", Self::exe_dir()),
             snapshot_dir: Self::exe_dir(),
             community_prefix: "3166".to_string(),
@@ -148,8 +184,25 @@ impl Settings {
                     if let Some(v) = s.sync_time {
                         config.sync_time = v;
                     }
-                    if let Some(v) = s.gobgp_path {
-                        config.gobgp_path = v;
+                    if let Some(v) = s.gobgp_api_host {
+                        config.gobgp_api_host = v;
+                    }
+                    if let Some(v) = s.gobgp_api_port {
+                        config.gobgp_api_port = v;
+                    }
+                    if let Some(v) = s.gobgp_nexthop_ipv4 {
+                        config.gobgp_nexthop_ipv4 = v;
+                    }
+                    if let Some(v) = s.gobgp_nexthop_ipv6 {
+                        config.gobgp_nexthop_ipv6 = v;
+                    }
+                    if let Some(v) = s.community_nexthop_ipv4 {
+                        config.community_nexthop_ipv4 =
+                            config.convert_country_next_hop_map(v, "IPv4");
+                    }
+                    if let Some(v) = s.community_nexthop_ipv6 {
+                        config.community_nexthop_ipv6 =
+                            config.convert_country_next_hop_map(v, "IPv6");
                     }
                     if let Some(v) = s.log_file {
                         config.log_file = v;
@@ -169,7 +222,7 @@ impl Settings {
             }
         }
 
-        // CLI 参数覆盖配置文件（优先级最高）
+        // 命令行参数覆盖配置文件（优先级最高）
         if let Some(v) = &args.ip_version {
             config.ip_version = IpVersion::from_str(v);
         }
@@ -179,8 +232,27 @@ impl Settings {
         if let Some(v) = &args.sync_time {
             config.sync_time = v.clone();
         }
-        if let Some(v) = &args.gobgp_path {
-            config.gobgp_path = v.clone();
+        if let Some(v) = &args.gobgp_api_host {
+            config.gobgp_api_host = v.clone();
+        }
+        if let Some(v) = args.gobgp_api_port {
+            config.gobgp_api_port = v;
+        }
+        if let Some(v) = &args.gobgp_nexthop_ipv4 {
+            config.gobgp_nexthop_ipv4 = v.clone();
+        }
+        if let Some(v) = &args.gobgp_nexthop_ipv6 {
+            config.gobgp_nexthop_ipv6 = v.clone();
+        }
+        for item in &args.community_nexthop_ipv4 {
+            if let Some((code, next_hop)) = config.parse_country_next_hop(item, "IPv4") {
+                config.community_nexthop_ipv4.insert(code, next_hop);
+            }
+        }
+        for item in &args.community_nexthop_ipv6 {
+            if let Some((code, next_hop)) = config.parse_country_next_hop(item, "IPv6") {
+                config.community_nexthop_ipv6.insert(code, next_hop);
+            }
         }
         if let Some(v) = &args.log_file {
             config.log_file = v.clone();
@@ -197,6 +269,7 @@ impl Settings {
 
         // 验证国家代码
         config.validate_country_code();
+        config.validate_next_hops();
 
         // 设置文件路径
         let snap_dir = config.snapshot_dir.trim_end_matches('/');
@@ -235,6 +308,114 @@ impl Settings {
         self.country_code == "NONECN"
     }
 
+    /// 生成 tonic 需要的 GoBGP API 连接地址
+    pub fn gobgp_api_addr(&self) -> String {
+        format!("http://{}:{}", self.gobgp_api_host, self.gobgp_api_port)
+    }
+
+    /// 根据团体字中的国家/地区数字码选择下一跳；未命中覆盖表时使用默认下一跳
+    pub fn next_hop_for_community(&self, community: &str, is_ipv6: bool) -> String {
+        let code = community
+            .split_once(':')
+            .map(|(_, code)| code)
+            .unwrap_or_default();
+        let overrides = if is_ipv6 {
+            &self.community_nexthop_ipv6
+        } else {
+            &self.community_nexthop_ipv4
+        };
+
+        overrides.get(code).cloned().unwrap_or_else(|| {
+            if is_ipv6 {
+                self.gobgp_nexthop_ipv6.clone()
+            } else {
+                self.gobgp_nexthop_ipv4.clone()
+            }
+        })
+    }
+
+    /// 校验默认下一跳和按国家/地区覆盖的下一跳，非法值会被忽略或回退
+    fn validate_next_hops(&mut self) {
+        if !matches!(self.gobgp_nexthop_ipv4.parse::<IpAddr>(), Ok(IpAddr::V4(_))) {
+            log::warn!(
+                "无效的 IPv4 下一跳: {}, 使用默认值 0.0.0.0",
+                self.gobgp_nexthop_ipv4
+            );
+            self.gobgp_nexthop_ipv4 = Ipv4Addr::UNSPECIFIED.to_string();
+        }
+
+        if !matches!(self.gobgp_nexthop_ipv6.parse::<IpAddr>(), Ok(IpAddr::V6(_))) {
+            log::warn!(
+                "无效的 IPv6 下一跳: {}, 使用默认值 ::",
+                self.gobgp_nexthop_ipv6
+            );
+            self.gobgp_nexthop_ipv6 = Ipv6Addr::UNSPECIFIED.to_string();
+        }
+
+        Self::validate_community_next_hops(&mut self.community_nexthop_ipv4, false);
+        Self::validate_community_next_hops(&mut self.community_nexthop_ipv6, true);
+    }
+
+    /// 将 TOML 中 `CN = "下一跳"` 形式的覆盖表转换为内部数字码 key
+    fn convert_country_next_hop_map(
+        &self,
+        map: HashMap<String, String>,
+        family: &str,
+    ) -> HashMap<String, String> {
+        map.into_iter()
+            .filter_map(|(country, next_hop)| {
+                self.country_to_numeric_code(&country, family)
+                    .map(|code| (code, next_hop))
+            })
+            .collect()
+    }
+
+    /// 解析 CLI 中 `CN=下一跳` 形式的单条覆盖配置
+    fn parse_country_next_hop(&self, item: &str, family: &str) -> Option<(String, String)> {
+        let (country, next_hop) = match item.split_once('=') {
+            Some(v) => v,
+            None => {
+                log::warn!("无效的团体字下一跳配置: {}，应为 COUNTRY=NEXTHOP", item);
+                return None;
+            }
+        };
+
+        self.country_to_numeric_code(country, family)
+            .map(|code| (code, next_hop.trim().to_string()))
+    }
+
+    /// 使用 ISO 3166-1 二位字母简写查找对应的三位数字码
+    fn country_to_numeric_code(&self, country: &str, family: &str) -> Option<String> {
+        let country = country.trim().to_uppercase();
+        crate::models::country::CountryCodeMap::default()
+            .get(&country)
+            .map(|code| code.to_string())
+            .or_else(|| {
+                log::warn!("{} 下一跳覆盖忽略未知国家/地区简写: {}", family, country);
+                None
+            })
+    }
+
+    /// 校验内部覆盖表；这里的 key 已经是团体字后半段的数字码
+    fn validate_community_next_hops(overrides: &mut HashMap<String, String>, is_ipv6: bool) {
+        overrides.retain(|code, next_hop| {
+            let valid_code = code.parse::<u16>().is_ok();
+            let valid_next_hop = matches!(
+                (next_hop.parse::<IpAddr>(), is_ipv6),
+                (Ok(IpAddr::V4(_)), false) | (Ok(IpAddr::V6(_)), true)
+            );
+
+            if !valid_code {
+                log::warn!("忽略无效的国家/地区数字码下一跳覆盖: {}", code);
+            }
+            if !valid_next_hop {
+                log::warn!("忽略无效的下一跳覆盖: {}={}", code, next_hop);
+            }
+
+            valid_code && valid_next_hop
+        });
+    }
+
     /// 获取需要处理的RIR列表
     pub fn get_rir_list(&self) -> Vec<String> {
         match self.country_code.as_str() {
@@ -250,6 +431,7 @@ impl Settings {
         }
     }
 
+    /// 默认 RIR delegated 数据源地址
     fn default_rir_urls() -> HashMap<String, String> {
         let mut map = HashMap::new();
         map.insert(
@@ -276,6 +458,7 @@ impl Settings {
         map
     }
 
+    /// 国家/地区简写到所属 RIR 的映射，用于决定需要下载哪些 delegated 文件
     fn default_country_rir_map() -> HashMap<String, String> {
         let mut map = HashMap::new();
 

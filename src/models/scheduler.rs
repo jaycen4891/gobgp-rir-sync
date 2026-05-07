@@ -22,6 +22,11 @@ pub struct RouteScheduler {
 }
 
 impl RouteScheduler {
+    /// 默认每日同步时间
+    fn default_sync_time() -> NaiveTime {
+        NaiveTime::from_num_seconds_from_midnight_opt(2 * 60 * 60, 0).unwrap_or(NaiveTime::MIN)
+    }
+
     pub fn new(settings: Settings) -> Self {
         let settings = Arc::new(settings);
         let route_manager = Arc::new(RouteManager::new((*settings).clone()));
@@ -54,19 +59,11 @@ impl RouteScheduler {
                     self.settings.sync_time,
                     e
                 );
-                NaiveTime::parse_from_str("02:00", "%H:%M").unwrap()
+                Self::default_sync_time()
             }
         };
 
-        log::info!("路由同步服务启动");
-        log::info!("  国家代码: {}", self.settings.country_code);
-        if self.settings.country_code == "NONECN" {
-            log::info!("  特殊模式: 过滤中国(CN)路由");
-        } else if self.settings.country_code == "ALL" {
-            log::info!("  特殊模式: 处理所有国家路由");
-        }
-        log::info!("  同步时间: {}", self.settings.sync_time);
-        log::info!("  IP 版本: {:?}", self.settings.ip_version);
+        log::info!("路由同步调度器启动");
 
         // 首次执行
         self.sync_operation().await;
@@ -152,20 +149,20 @@ impl RouteScheduler {
         let snapshot_mtime_date = Self::snapshot_mtime(&snapshot_file);
         let today = Local::now().date_naive();
 
-        // 快照不存在 → 下载 RIR，走完整流程
-        if snapshot_mtime_date.is_none() {
-            log::info!("{} | 无快照文件，下载 RIR 数据", tag);
-            return self
-                .sync_with_rir(protocol, &snapshot_file, last_prefixes_lock)
-                .await;
-        }
-
-        // 快照不是今天的 → 需要更新，下载 RIR
-        if snapshot_mtime_date.unwrap() < today {
-            log::info!("{} | 快照不是今天的，下载最新 RIR 数据", tag);
-            return self
-                .sync_with_rir(protocol, &snapshot_file, last_prefixes_lock)
-                .await;
+        match snapshot_mtime_date {
+            None => {
+                log::info!("{} | 无快照文件，下载 RIR 数据", tag);
+                return self
+                    .sync_with_rir(protocol, &snapshot_file, last_prefixes_lock)
+                    .await;
+            }
+            Some(snapshot_date) if snapshot_date < today => {
+                log::info!("{} | 快照不是今天的，下载最新 RIR 数据", tag);
+                return self
+                    .sync_with_rir(protocol, &snapshot_file, last_prefixes_lock)
+                    .await;
+            }
+            Some(_) => {}
         }
 
         // 快照是今天的 → 按快照恢复一次
@@ -175,22 +172,15 @@ impl RouteScheduler {
             return format!("{} | 快照文件为空，跳过", tag);
         }
 
-        // 加载快照到内存
-        {
-            let mut sorted: Vec<(String, String)> = snapshot_prefixes.clone().into_iter().collect();
-            sorted.sort_by(|a, b| a.0.cmp(&b.0));
-            let mut guard = last_prefixes_lock.lock().await;
-            if guard.is_none() {
-                *guard = Some(sorted);
-            }
-        }
+        // 今日快照只在内存为空时写入，避免覆盖本进程已完成的最新同步结果
+        Self::store_cached_prefixes(last_prefixes_lock, &snapshot_prefixes, true).await;
 
         let snapshot_count = snapshot_prefixes.len();
         log::info!("{} | 从快照恢复 {} 条路由", tag, snapshot_count);
 
         let (ok, fail) = self
             .route_manager
-            .batch_sync(&snapshot_prefixes, &[], &tag)
+            .batch_sync(&snapshot_prefixes, &HashMap::new(), &tag)
             .await;
 
         format!(
@@ -207,6 +197,25 @@ impl RouteScheduler {
         cached_prefixes
             .map(|p| p.iter().cloned().collect())
             .unwrap_or_else(|| RouteManager::load_snapshot(snapshot_file))
+    }
+
+    /// 将前缀集合按前缀排序后写入内存缓存，保证后续差异比较顺序稳定
+    async fn store_cached_prefixes(
+        lock: &Arc<Mutex<Option<PrefixEntry>>>,
+        entries: &HashMap<String, String>,
+        only_if_empty: bool,
+    ) {
+        let mut guard = lock.lock().await;
+        if only_if_empty && guard.is_some() {
+            return;
+        }
+
+        let mut sorted: PrefixEntry = entries
+            .iter()
+            .map(|(prefix, community)| (prefix.clone(), community.clone()))
+            .collect();
+        sorted.sort_by(|a, b| a.0.cmp(&b.0));
+        *guard = Some(sorted);
     }
 
     /// 下载 RIR 并执行完整同步（首次运行 / 定时更新）
@@ -259,44 +268,73 @@ impl RouteScheduler {
 
         let added_count = current_keys_set.difference(&last_keys_set).count();
         let removed_count = last_keys_set.difference(&current_keys_set).count();
+        let changed_prefixes: Vec<String> = prefixes
+            .iter()
+            .filter(|(prefix, community)| {
+                last_set
+                    .get(*prefix)
+                    .is_some_and(|last_community| last_community != *community)
+            })
+            .map(|(prefix, _)| prefix.clone())
+            .collect();
+        let changed_count = changed_prefixes.len();
 
         if prefixes == last_set {
             let _ = self.route_manager.save_snapshot(&prefixes, snapshot_file);
             return format!("{} | 路由总数 {}, 新增 0, 删除 0, 无变化", tag, total);
         }
 
-        // 构建 to_add: 只取本次新增的前缀（带团体字）
+        // 构建 to_add: 本次新增的前缀，或团体字变化后需要重新注入的前缀
         let to_add: HashMap<String, String> = prefixes
             .iter()
-            .filter(|(prefix, _)| !last_set.contains_key(*prefix))
+            .filter(|(prefix, community)| {
+                !last_set.contains_key(*prefix)
+                    || last_set
+                        .get(*prefix)
+                        .is_some_and(|last_community| last_community != *community)
+            })
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
 
-        // 构建 to_del: 取上次有但本次没有的前缀
-        let to_del: Vec<String> = last_set
-            .keys()
-            .filter(|prefix| !prefixes.contains_key(*prefix))
-            .cloned()
+        // 构建 to_del: 上次有但本次没有，或团体字变化后需要先删除再添加的前缀
+        let mut to_del: HashMap<String, String> = last_set
+            .iter()
+            .filter(|(prefix, _)| !prefixes.contains_key(*prefix))
+            .map(|(prefix, community)| (prefix.clone(), community.clone()))
             .collect();
+        to_del.extend(changed_prefixes.into_iter().filter_map(|prefix| {
+            last_set
+                .get(&prefix)
+                .map(|community| (prefix, community.clone()))
+        }));
 
-        log::info!("{} | 新增 {}, 删除 {}", tag, added_count, removed_count);
+        log::info!(
+            "{} | 新增 {}, 删除 {}, 更新 {}",
+            tag,
+            added_count,
+            removed_count,
+            changed_count
+        );
 
         let (ok, fail) = self.route_manager.batch_sync(&to_add, &to_del, &tag).await;
 
-        // 保存完整的当前前缀集合到快照
+        // 只有 GoBGP 增删全部成功后才推进快照，避免快照与实际 RIB 长期不一致
+        if fail > 0 {
+            return format!(
+                "{} | 路由总数 {}, 新增 {}, 删除 {}, 更新 {}\n{} | 同步成功 {}, 同步失败 {}，保留旧快照等待下次重试",
+                tag, total, added_count, removed_count, changed_count, tag, ok, fail,
+            );
+        }
+
         if let Err(e) = self.route_manager.save_snapshot(&prefixes, snapshot_file) {
             log::warn!("{} | 快照保存失败: {}", tag, e);
         }
 
-        {
-            let mut sorted: Vec<(String, String)> = prefixes.into_iter().collect();
-            sorted.sort_by(|a, b| a.0.cmp(&b.0));
-            *last_prefixes_lock.lock().await = Some(sorted);
-        }
+        Self::store_cached_prefixes(last_prefixes_lock, &prefixes, false).await;
 
         format!(
-            "{} | 路由总数 {}, 新增 {}, 删除 {}\n{} | 同步成功 {}, 同步失败 {}",
-            tag, total, added_count, removed_count, tag, ok, fail,
+            "{} | 路由总数 {}, 新增 {}, 删除 {}, 更新 {}\n{} | 同步成功 {}, 同步失败 {}",
+            tag, total, added_count, removed_count, changed_count, tag, ok, fail,
         )
     }
 }

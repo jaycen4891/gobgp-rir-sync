@@ -10,17 +10,29 @@ country_code = "CN"
 # 每日同步时间 (默认: 02:00)
 sync_time = "02:00"
 
-# gobgp 可执行文件路径
-gobgp_path = "/usr/local/bin/gobgp"
+# GoBGP gRPC API 地址和端口
+gobgp_api_host = "127.0.0.1"
+gobgp_api_port = 50051
+
+# 注入路由时传给 GoBGP 的下一跳，可按实际对外通告需求修改
+gobgp_nexthop_ipv4 = "0.0.0.0"
+gobgp_nexthop_ipv6 = "::"
+
+# 按国家/地区简写覆盖下一跳；程序会自动转换为团体字数字码，未配置时使用默认下一跳
+[settings.community_nexthop_ipv4]
+CN = "198.19.0.254"
+
+[settings.community_nexthop_ipv6]
+CN = "2001:db8::fe"
+
+# 团体字前缀 (默认: 3166)
+community_prefix = "3166"
+
+# 并发添加/删除路由的任务数 (默认: 100)
+concurrency = 100
 
 # 日志文件路径
 log_file = "./gobgp_sync.log"
 
 # 快照文件目录
 snapshot_dir = "./"
-
-# 团体字前缀 (默认: 3166)
-# community_prefix = "3166"
-
-# 并发添加/删除路由的任务数 (默认: 100)
-concurrency = 100

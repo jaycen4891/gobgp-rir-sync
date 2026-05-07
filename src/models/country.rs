@@ -1,38 +1,19 @@
 use std::collections::HashMap;
 
-/// A mapping from ISO 3166-1 alpha-2 country codes to their 3-digit numeric codes.
+/// ISO 3166-1 二位字母国家/地区代码到三位数字码的映射
 ///
-/// Provides lookups for the country code itself as well as a BGP community string
-/// in the format `<prefix>:<numeric_code>` (e.g., `"3166:156"` for China).
+/// 用于生成 `<团体字前缀>:<数字码>` 格式的标准团体字，例如中国为 `3166:156`
 pub struct CountryCodeMap {
     map: HashMap<String, u16>,
 }
 
 impl CountryCodeMap {
-    /// Look up the numeric code for a given ISO 3166-1 alpha-2 country code.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use gobgp_sync::models::country::CountryCodeMap;
-    /// let map = CountryCodeMap::default();
-    /// assert_eq!(map.get("CN"), Some(156));
-    /// assert_eq!(map.get("XX"), None);
-    /// ```
+    /// 查询国家/地区二位字母代码对应的数字码
     pub fn get(&self, code: &str) -> Option<u16> {
         self.map.get(code).copied()
     }
 
-    /// Return the BGP community string in the format `<prefix>:<numeric_code>`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use gobgp_sync::models::country::CountryCodeMap;
-    /// let map = CountryCodeMap::default();
-    /// assert_eq!(map.community("CN", "3166"), Some("3166:156".to_string()));
-    /// assert_eq!(map.community("XX", "3166"), None);
-    /// ```
+    /// 生成 `<团体字前缀>:<数字码>` 格式的团体字
     pub fn community(&self, code: &str, prefix: &str) -> Option<String> {
         self.get(code).map(|n| format!("{}:{}", prefix, n))
     }

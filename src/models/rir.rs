@@ -4,7 +4,10 @@ use std::time::Duration;
 use crate::config::{IpVersion, Settings};
 use crate::models::country::CountryCodeMap;
 
-/// RIR数据获取器
+/// RIR 数据获取器
+///
+/// 每次同步按配置决定需要下载哪些 RIR delegated 文件；任一目标源下载失败时，
+/// 本轮同步会失败并保留旧快照，避免使用不完整数据更新 GoBGP
 pub struct RIRDataFetcher {
     retry: u32,
     timeout: u64,
@@ -20,11 +23,12 @@ impl Default for RIRDataFetcher {
 }
 
 impl RIRDataFetcher {
+    /// 使用默认重试次数和超时时间创建下载器
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// 下载RIR数据，优先使用缓存
+    /// 下载本轮需要处理的 RIR 数据
     pub async fn download_rir_data(
         &self,
         settings: &Settings,
@@ -57,7 +61,9 @@ impl RIRDataFetcher {
         Ok(rir_data)
     }
 
-    /// 带重试的下载
+    /// 带重试的 HTTP 下载
+    ///
+    /// delegated 文件可能较大，因此这里按 chunk 读取并周期性输出进度日志
     async fn download_with_retry(&self, url: &str) -> anyhow::Result<String> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))
@@ -115,11 +121,11 @@ impl RIRDataFetcher {
     }
 }
 
-/// 前缀提取器
+/// RIR delegated 数据前缀提取器
 pub struct PrefixExtractor;
 
 impl PrefixExtractor {
-    /// 从IPv4行解析前缀长度
+    /// 从 IPv4 delegated 行的地址数量计算 CIDR 前缀长度
     fn count_to_prefixlen(count_str: &str) -> Option<u32> {
         let count: f64 = match count_str.parse() {
             Ok(v) => v,
@@ -172,7 +178,9 @@ impl PrefixExtractor {
         }
     }
 
-    /// 提取IPv4前缀，返回 (前缀, 团体字) 映射
+    /// 提取 IPv4 前缀，返回 `前缀 -> 团体字` 映射
+    ///
+    /// RIR delegated IPv4 行中的第五列是地址数量，需要转换成 CIDR 前缀长度
     fn extract_ipv4_prefixes(
         text: &str,
         target_country: Option<&str>,
@@ -228,7 +236,9 @@ impl PrefixExtractor {
         prefixes
     }
 
-    /// 提取IPv6前缀，返回 (前缀, 团体字) 映射
+    /// 提取 IPv6 前缀，返回 `前缀 -> 团体字` 映射
+    ///
+    /// RIR delegated IPv6 行中的第五列已经是前缀长度，可直接拼成 CIDR
     fn extract_ipv6_prefixes(
         text: &str,
         target_country: Option<&str>,
@@ -281,7 +291,10 @@ impl PrefixExtractor {
         prefixes
     }
 
-    /// 根据国家模式获取前缀，返回 (IPv4前缀→团体字, IPv6前缀→团体字)
+    /// 根据国家模式获取前缀
+    ///
+    /// `ALL` 不做国家过滤，`NONECN` 排除 CN，其它值只保留对应国家/地区
+    /// 返回值分别是 IPv4 和 IPv6 的 `前缀 -> 团体字` 映射
     pub fn get_prefixes_by_country_mode(
         settings: &Settings,
         rir_data: &HashMap<String, String>,

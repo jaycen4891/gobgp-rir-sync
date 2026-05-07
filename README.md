@@ -35,7 +35,12 @@ GoBGP 路由同步服务 — 根据国家代码从 RIR 数据库自动同步 IP 
 | `--ip-version`       | `-i`   | IP 协议版本: `ipv4`, `ipv6`, `dual`   | `DUAL`                 |
 | `--country`          | `-C`   | 国家代码，特殊值 `ALL` / `NONECN`     | `CN`                   |
 | `--sync-time`        | `-s`   | 每日同步时间 (HH:MM)                  | `02:00`                |
-| `--gobgp-path`       | `-g`   | gobgp 可执行文件路径                  | `/usr/local/bin/gobgp` |
+| `--gobgp-api-host`   |        | GoBGP gRPC API 地址                   | `127.0.0.1`            |
+| `--gobgp-api-port`   |        | GoBGP gRPC API 端口                   | `50051`                |
+| `--gobgp-nexthop-ipv4` |      | 注入 IPv4 路由时传给 GoBGP 的下一跳   | `0.0.0.0`              |
+| `--gobgp-nexthop-ipv6` |      | 注入 IPv6 路由时传给 GoBGP 的下一跳   | `::`                   |
+| `--community-nexthop-ipv4` |  | 按国家/地区简写覆盖 IPv4 下一跳，格式 `CN=198.19.0.254` |                        |
+| `--community-nexthop-ipv6` |  | 按国家/地区简写覆盖 IPv6 下一跳，格式 `CN=2001:db8::fe` |                        |
 | `--log-file`         | `-l`   | 日志文件路径                          | `./gobgp_sync.log`     |
 | `--snapshot-dir`     | `-d`   | 快照文件目录                          | `./`                   |
 | `--community-prefix` |        | 团体字前缀，如 `3166` 生成 `3166:156` | `3166`                 |
@@ -122,6 +127,24 @@ sudo journalctl -u gobgp-sync -n 100
 ExecStart=/usr/local/bin/gobgp-sync -C ALL -s 03:00 -i ipv4 -l /var/log/gobgp/gobgp_sync.log
 ```
 
+如 GoBGP API 不在本机默认端口，可加上：
+
+```ini
+ExecStart=/usr/local/bin/gobgp-sync --gobgp-api-host 10.64.129.53 --gobgp-api-port 50051 -C CN -i dual
+```
+
+需要向邻居通告指定下一跳时，可同时设置：
+
+```ini
+ExecStart=/usr/local/bin/gobgp-sync --gobgp-nexthop-ipv4 10.64.129.53 --gobgp-nexthop-ipv6 2001:db8::1 -C CN -i dual
+```
+
+也可以只针对某个国家/地区简写覆盖下一跳。程序会把简写转换成团体字后半部分，例如 `CN` 会转换成 `156`，并匹配 `3166:156`：
+
+```ini
+ExecStart=/usr/local/bin/gobgp-sync --community-prefix 3166 --community-nexthop-ipv4 CN=198.19.0.254 --community-nexthop-ipv6 CN=2001:db8::fe -C CN -i dual
+```
+
 修改后重新加载：
 
 ```bash
@@ -140,3 +163,47 @@ cargo build --release
 # Linux x86_64 (静态链接, musl)
 cargo build --target x86_64-unknown-linux-musl --release
 ```
+
+---
+
+## 手动验证 GoBGP API
+
+项目提供了 `examples/gobgp_route_test.rs`，用于手动验证 GoBGP gRPC API 添加和删除路由。
+
+默认参数：
+
+- API: `http://10.64.129.53:50051`
+- 前缀: `1.1.1.1/32`
+- 下一跳: `198.19.0.254`
+- 团体字: `3166:156`
+
+添加路由：
+
+```bash
+cargo run --example gobgp_route_test -- --action add
+```
+
+删除路由：
+
+```bash
+cargo run --example gobgp_route_test -- --action del
+```
+
+先添加再删除：
+
+```bash
+cargo run --example gobgp_route_test
+```
+
+自定义参数：
+
+```bash
+cargo run --example gobgp_route_test -- \
+  --api http://127.0.0.1:50051 \
+  --prefix 1.1.1.1/32 \
+  --next-hop 198.19.0.254 \
+  --community 3166:156 \
+  --action both
+```
+
+说明：添加时会携带团体字，删除时只携带前缀和下一跳，不携带团体字，便于验证生产删除逻辑是否能正常移除路由。
