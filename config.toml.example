@@ -1,0 +1,26 @@
+# GoBGP 路由同步服务配置文件
+# 将此文件复制为 config.toml 并修改配置
+[settings]
+# IP协议版本: ipv4, ipv6, dual (默认: dual)
+ip_version = "dual"
+
+# 国家代码: CN, JP, US, ALL, NONECN (默认: CN)
+country_code = "CN"
+
+# 每日同步时间 (默认: 02:00)
+sync_time = "02:00"
+
+# gobgp 可执行文件路径
+gobgp_path = "/usr/local/bin/gobgp"
+
+# 日志文件路径
+log_file = "./gobgp_sync.log"
+
+# 快照文件目录
+snapshot_dir = "./"
+
+# 团体字前缀 (默认: 3166)
+# community_prefix = "3166"
+
+# 并发添加/删除路由的任务数 (默认: 100)
+concurrency = 100
