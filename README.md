@@ -56,9 +56,14 @@ GoBGP 路由同步服务 — 根据国家代码从 RIR 数据库自动同步 IP 
 
 TOML 配置支持按 RIR 地区覆盖团体字前缀和下一跳。地区名称为 `APNIC`、`RIPE`、`ARIN`、`LACNIC`、`AFRINIC`。程序仍然按国家/地区生成团体字后半部分，例如 CN 为 `156`；只是在生成前缀时先看该国家所属 RIR 是否配置了地区前缀。
 
+TOML 中 `[settings.region_*]`、`[settings.community_*]` 是子表；`concurrency`、`log_file`、`snapshot_dir` 这类普通配置需要放在子表之前，避免被解析成某个子表里的键。
+
 ```toml
 [settings]
 community_prefix = "3166"
+concurrency = 100
+log_file = "/var/log/gobgp/gobgp_sync.log"
+snapshot_dir = "/tmp"
 
 [settings.region_community_prefix]
 APNIC = "65166"

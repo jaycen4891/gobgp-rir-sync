@@ -17,6 +17,19 @@ gobgp_api_port = 50051
 # 默认团体字前缀 (默认: 3166)
 community_prefix = "3166"
 
+# 注入路由时传给 GoBGP 的下一跳，可按实际对外通告需求修改
+gobgp_nexthop_ipv4 = "0.0.0.0"
+gobgp_nexthop_ipv6 = "::"
+
+# 并发添加/删除路由的任务数 (默认: 100)
+concurrency = 100
+
+# 日志文件路径
+log_file = "/var/log/gobgp/gobgp_sync.log"
+
+# 快照文件目录 (默认: /tmp)
+snapshot_dir = "/tmp"
+
 # 按 RIR 地区覆盖团体字前缀；未配置的地区使用 community_prefix
 [settings.region_community_prefix]
 APNIC = "65166"
@@ -24,10 +37,6 @@ RIPE = "65167"
 ARIN = "65168"
 LACNIC = "65169"
 AFRINIC = "65170"
-
-# 注入路由时传给 GoBGP 的下一跳，可按实际对外通告需求修改
-gobgp_nexthop_ipv4 = "0.0.0.0"
-gobgp_nexthop_ipv6 = "::"
 
 # 按国家简写覆盖下一跳；程序会自动转换为团体字数字码，未配置时使用默认下一跳
 [settings.community_nexthop_ipv4]
@@ -42,12 +51,3 @@ RIPE = "198.19.1.254"
 
 [settings.region_nexthop_ipv6]
 RIPE = "2001:db8:1::fe"
-
-# 并发添加/删除路由的任务数 (默认: 100)
-concurrency = 100
-
-# 日志文件路径
-log_file = "/var/log/gobgp/gobgp_sync.log"
-
-# 快照文件目录 (默认: /tmp)
-snapshot_dir = "/tmp"
