@@ -137,6 +137,77 @@ pub mod apipb {
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct DeletePathResponse {}
 
+    /// API representation of table.LookupPrefix.
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct TableLookupPrefix {
+        #[prost(string, tag = "1")]
+        pub prefix: String,
+        #[prost(enumeration = "table_lookup_prefix::Type", tag = "2")]
+        pub r#type: i32,
+    }
+
+    pub mod table_lookup_prefix {
+        #[derive(
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+        )]
+        #[repr(i32)]
+        pub enum Type {
+            Exact = 0,
+            Longer = 1,
+            Shorter = 2,
+        }
+    }
+
+    /// ListPath 请求，用于查询 Global RIB 中的现有路由。
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListPathRequest {
+        #[prost(enumeration = "TableType", tag = "1")]
+        pub table_type: i32,
+        #[prost(string, tag = "2")]
+        pub name: String,
+        #[prost(message, optional, tag = "3")]
+        pub family: Option<Family>,
+        #[prost(message, repeated, tag = "4")]
+        pub prefixes: Vec<TableLookupPrefix>,
+        #[prost(enumeration = "list_path_request::SortType", tag = "5")]
+        pub sort_type: i32,
+        #[prost(bool, tag = "6")]
+        pub enable_filtered: bool,
+        #[prost(bool, tag = "7")]
+        pub enable_nlri_binary: bool,
+        #[prost(bool, tag = "8")]
+        pub enable_attribute_binary: bool,
+        #[prost(bool, tag = "9")]
+        pub enable_only_binary: bool,
+    }
+
+    pub mod list_path_request {
+        #[derive(
+            Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration,
+        )]
+        #[repr(i32)]
+        pub enum SortType {
+            None = 0,
+            Prefix = 1,
+        }
+    }
+
+    /// ListPath 响应中的目的前缀。
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct Destination {
+        #[prost(string, tag = "1")]
+        pub prefix: String,
+        #[prost(message, repeated, tag = "2")]
+        pub paths: Vec<Path>,
+    }
+
+    /// ListPath 流式响应。
+    #[derive(Clone, PartialEq, ::prost::Message)]
+    pub struct ListPathResponse {
+        #[prost(message, optional, tag = "1")]
+        pub destination: Option<Destination>,
+    }
+
     /// `apipb.GobgpApi` 的最小 tonic 客户端
     pub mod gobgp_api_client {
         use tonic::codegen::{http, Body, Bytes, StdError};
@@ -192,6 +263,23 @@ pub mod apipb {
                 let path = http::uri::PathAndQuery::from_static("/apipb.GobgpApi/DeletePath");
                 let codec = tonic_prost::ProstCodec::default();
                 self.inner.unary(request.into_request(), path, codec).await
+            }
+
+            pub async fn list_path(
+                &mut self,
+                request: impl tonic::IntoRequest<super::ListPathRequest>,
+            ) -> Result<
+                tonic::Response<tonic::codec::Streaming<super::ListPathResponse>>,
+                tonic::Status,
+            > {
+                self.inner.ready().await.map_err(|e| {
+                    tonic::Status::unknown(format!("GoBGP API 服务未就绪: {}", e.into()))
+                })?;
+                let path = http::uri::PathAndQuery::from_static("/apipb.GobgpApi/ListPath");
+                let codec = tonic_prost::ProstCodec::default();
+                self.inner
+                    .server_streaming(request.into_request(), path, codec)
+                    .await
             }
         }
     }

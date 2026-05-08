@@ -31,6 +31,29 @@ async fn main() -> anyhow::Result<()> {
         settings.gobgp_nexthop_ipv4,
         settings.gobgp_nexthop_ipv6
     );
+    if settings.region_community_prefix.is_empty() {
+        log::info!(
+            "  - RIR 地区团体字前缀: 未配置，全部使用默认 {}",
+            settings.community_prefix
+        );
+    } else {
+        log::info!(
+            "  - RIR 地区团体字前缀: {}",
+            format_string_map(&settings.region_community_prefix)
+        );
+    }
+    if settings.region_nexthop_ipv4.is_empty() && settings.region_nexthop_ipv6.is_empty() {
+        log::info!("  - RIR 地区下一跳: 未配置");
+    } else {
+        log::info!(
+            "  - RIR 地区 IPv4 下一跳: {}",
+            format_string_map_or_empty(&settings.region_nexthop_ipv4)
+        );
+        log::info!(
+            "  - RIR 地区 IPv6 下一跳: {}",
+            format_string_map_or_empty(&settings.region_nexthop_ipv6)
+        );
+    }
     log::info!("  - 日志文件: {}", settings.log_file);
     log::info!("  - 快照目录: {}", settings.snapshot_dir);
 
@@ -39,4 +62,22 @@ async fn main() -> anyhow::Result<()> {
     scheduler.run().await;
 
     Ok(())
+}
+
+fn format_string_map(map: &std::collections::HashMap<String, String>) -> String {
+    let mut entries: Vec<_> = map.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+    entries
+        .into_iter()
+        .map(|(key, value)| format!("{}={}", key, value))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn format_string_map_or_empty(map: &std::collections::HashMap<String, String>) -> String {
+    if map.is_empty() {
+        "未配置".to_string()
+    } else {
+        format_string_map(map)
+    }
 }

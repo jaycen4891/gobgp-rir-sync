@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::config::{IpVersion, Settings};
-use crate::models::country::CountryCodeMap;
 
 /// RIR 数据获取器
 ///
@@ -199,8 +198,7 @@ impl PrefixExtractor {
         text: &str,
         target_country: Option<&str>,
         exclude: bool,
-        country_map: &CountryCodeMap,
-        community_prefix: &str,
+        settings: &Settings,
     ) -> HashMap<String, String> {
         let mut prefixes = HashMap::new();
 
@@ -237,9 +235,7 @@ impl PrefixExtractor {
                 let cidr = format!("{}/{}", base_ip, prefix_len);
                 if Self::is_valid_cidr(&cidr) {
                     // 获取团体字：如果国家代码查不到，用空字符串
-                    let community = country_map
-                        .community(cc, community_prefix)
-                        .unwrap_or_default();
+                    let community = settings.community_for_country(cc).unwrap_or_default();
                     prefixes.insert(cidr, community);
                 } else {
                     log::warn!("无效CIDR, 跳过: {}", cidr);
@@ -257,8 +253,7 @@ impl PrefixExtractor {
         text: &str,
         target_country: Option<&str>,
         exclude: bool,
-        country_map: &CountryCodeMap,
-        community_prefix: &str,
+        settings: &Settings,
     ) -> HashMap<String, String> {
         let mut prefixes = HashMap::new();
 
@@ -293,9 +288,7 @@ impl PrefixExtractor {
 
             let cidr = format!("{}/{}", base_ip, prefix_len);
             if Self::is_valid_cidr(&cidr) {
-                let community = country_map
-                    .community(cc, community_prefix)
-                    .unwrap_or_default();
+                let community = settings.community_for_country(cc).unwrap_or_default();
                 prefixes.insert(cidr, community);
             } else {
                 log::warn!("无效CIDR, 跳过: {}", cidr);
@@ -314,8 +307,6 @@ impl PrefixExtractor {
         rir_data: &HashMap<String, String>,
         ip_version: Option<&IpVersion>,
     ) -> (HashMap<String, String>, HashMap<String, String>) {
-        let country_map = CountryCodeMap::default();
-        let community_prefix = &settings.community_prefix;
         let mut ipv4_prefixes = HashMap::new();
         let mut ipv6_prefixes = HashMap::new();
 
@@ -341,8 +332,7 @@ impl PrefixExtractor {
                         Some(target_country)
                     },
                     filter_cn,
-                    &country_map,
-                    community_prefix,
+                    settings,
                 ));
             }
 
@@ -355,8 +345,7 @@ impl PrefixExtractor {
                         Some(target_country)
                     },
                     filter_cn,
-                    &country_map,
-                    community_prefix,
+                    settings,
                 ));
             }
         }

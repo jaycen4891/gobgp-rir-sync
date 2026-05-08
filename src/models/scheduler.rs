@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -176,17 +176,65 @@ impl RouteScheduler {
         Self::store_cached_prefixes(last_prefixes_lock, &snapshot_prefixes, true).await;
 
         let snapshot_count = snapshot_prefixes.len();
-        log::info!("{} | 从快照恢复 {} 条路由", tag, snapshot_count);
+        log::info!(
+            "{} | 对账快照 {} 条路由与 GoBGP Global RIB",
+            tag,
+            snapshot_count
+        );
+
+        let existing_prefixes = match self
+            .route_manager
+            .list_global_prefixes(protocol, &tag)
+            .await
+        {
+            Ok(prefixes) => prefixes,
+            Err(e) => {
+                return format!("{} | 查询 GoBGP Global RIB 失败: {}", tag, e);
+            }
+        };
+
+        let missing_prefixes =
+            Self::missing_snapshot_prefixes(&snapshot_prefixes, &existing_prefixes);
+        let missing_count = missing_prefixes.len();
+
+        if missing_prefixes.is_empty() {
+            return format!(
+                "{} | 快照路由 {} 条，GoBGP 已存在 {} 条，缺失 0 条",
+                tag,
+                snapshot_count,
+                existing_prefixes.len(),
+            );
+        }
+
+        log::info!(
+            "{} | 快照路由 {} 条，GoBGP 已存在 {} 条，追加缺失 {} 条",
+            tag,
+            snapshot_count,
+            existing_prefixes.len(),
+            missing_count
+        );
 
         let (ok, fail) = self
             .route_manager
-            .batch_sync(&snapshot_prefixes, &HashMap::new(), &tag)
+            .batch_sync(&missing_prefixes, &HashMap::new(), &tag)
             .await;
 
         format!(
-            "{} | 从快照恢复 {} 条路由\n{} | 同步成功 {}, 同步失败 {}",
-            tag, snapshot_count, tag, ok, fail,
+            "{} | 快照路由 {} 条，缺失追加 {} 条\n{} | 同步成功 {}, 同步失败 {}",
+            tag, snapshot_count, missing_count, tag, ok, fail,
         )
+    }
+
+    /// 从快照中筛出 GoBGP Global RIB 当前不存在的前缀。
+    fn missing_snapshot_prefixes(
+        snapshot_prefixes: &HashMap<String, String>,
+        existing_prefixes: &HashSet<String>,
+    ) -> HashMap<String, String> {
+        snapshot_prefixes
+            .iter()
+            .filter(|(prefix, _)| !existing_prefixes.contains(*prefix))
+            .map(|(prefix, community)| (prefix.clone(), community.clone()))
+            .collect()
     }
 
     /// 获取用于差异比较的上一版前缀：优先用内存缓存，服务重启后回退到快照文件

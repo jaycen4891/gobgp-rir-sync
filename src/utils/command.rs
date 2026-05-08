@@ -1,4 +1,5 @@
 use prost::Message;
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -283,6 +284,51 @@ impl CommandExecutor {
                 false
             }
         }
+    }
+
+    /// 查询 GoBGP Global RIB 中当前已有的 IPv4/IPv6 单播前缀。
+    pub async fn list_global_prefixes(
+        settings: &Settings,
+        is_ipv6: bool,
+        tag: &str,
+    ) -> anyhow::Result<HashSet<String>> {
+        let mut client = Self::connect(settings, tag)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("连接 GoBGP API 失败"))?;
+
+        let family = apipb::Family {
+            afi: if is_ipv6 {
+                apipb::family::Afi::Ip6 as i32
+            } else {
+                apipb::family::Afi::Ip as i32
+            },
+            safi: apipb::family::Safi::Unicast as i32,
+        };
+
+        let request = apipb::ListPathRequest {
+            table_type: apipb::TableType::Global as i32,
+            name: String::new(),
+            family: Some(family),
+            prefixes: Vec::new(),
+            sort_type: apipb::list_path_request::SortType::Prefix as i32,
+            enable_filtered: false,
+            enable_nlri_binary: false,
+            enable_attribute_binary: false,
+            enable_only_binary: false,
+        };
+
+        let mut stream = client.list_path(request).await?.into_inner();
+        let mut prefixes = HashSet::new();
+
+        while let Some(response) = stream.message().await? {
+            if let Some(destination) = response.destination {
+                if !destination.prefix.is_empty() && !destination.paths.is_empty() {
+                    prefixes.insert(destination.prefix);
+                }
+            }
+        }
+
+        Ok(prefixes)
     }
 
     /// 构造 GoBGP v3 API 需要的 Path

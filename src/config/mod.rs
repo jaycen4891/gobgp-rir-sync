@@ -3,143 +3,14 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::PathBuf;
 
 use clap::Parser;
-use serde::Deserialize;
 
-/// 路由同步服务配置
-/// 支持通过命令行参数和配置文件两种方式配置
-#[derive(Parser, Debug, Clone)]
-#[command(name = "gobgp-sync", version, about = "GoBGP 路由同步服务")]
-pub struct CliArgs {
-    /// 配置文件路径 (TOML格式)
-    #[arg(short = 'c', long = "config", value_name = "FILE")]
-    pub config: Option<PathBuf>,
+use crate::models::country::CountryCodeMap;
 
-    /// IP协议版本: ipv4, ipv6, dual (默认: dual)
-    #[arg(short = 'i', long = "ip-version")]
-    pub ip_version: Option<String>,
+mod cli;
+mod types;
 
-    /// 国家代码: CN, JP, US, ALL, NONECN (默认: CN)
-    #[arg(short = 'C', long = "country")]
-    pub country_code: Option<String>,
-
-    /// 每日同步时间 (格式: HH:MM, 默认: 02:00)
-    #[arg(short = 's', long = "sync-time")]
-    pub sync_time: Option<String>,
-
-    /// GoBGP gRPC API 地址
-    #[arg(long = "gobgp-api-host")]
-    pub gobgp_api_host: Option<String>,
-
-    /// GoBGP gRPC API 端口
-    #[arg(long = "gobgp-api-port")]
-    pub gobgp_api_port: Option<u16>,
-
-    /// GoBGP 注入 IPv4 路由时使用的下一跳
-    #[arg(long = "gobgp-nexthop-ipv4")]
-    pub gobgp_nexthop_ipv4: Option<String>,
-
-    /// GoBGP 注入 IPv6 路由时使用的下一跳
-    #[arg(long = "gobgp-nexthop-ipv6")]
-    pub gobgp_nexthop_ipv6: Option<String>,
-
-    /// 按国家/地区简写覆盖 IPv4 下一跳，格式: CN=198.19.0.254
-    #[arg(long = "community-nexthop-ipv4", value_name = "COUNTRY=NEXTHOP")]
-    pub community_nexthop_ipv4: Vec<String>,
-
-    /// 按国家/地区简写覆盖 IPv6 下一跳，格式: CN=2001:db8::fe
-    #[arg(long = "community-nexthop-ipv6", value_name = "COUNTRY=NEXTHOP")]
-    pub community_nexthop_ipv6: Vec<String>,
-
-    /// 日志文件路径 (默认: ./gobgp_sync.log)
-    #[arg(short = 'l', long = "log-file")]
-    pub log_file: Option<String>,
-
-    /// 快照文件目录 (默认: ./)
-    #[arg(short = 'd', long = "snapshot-dir")]
-    pub snapshot_dir: Option<String>,
-
-    /// 团体字前缀 (默认: 3166)
-    #[arg(long = "community-prefix")]
-    pub community_prefix: Option<String>,
-
-    /// 并发添加/删除路由的任务数 (默认: 100)
-    #[arg(long = "concurrency")]
-    pub concurrency: Option<usize>,
-}
-
-/// TOML配置文件结构
-#[derive(Debug, Clone, Deserialize)]
-pub struct ConfigFile {
-    pub settings: Option<SettingsConfig>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct SettingsConfig {
-    pub ip_version: Option<String>,
-    pub country_code: Option<String>,
-    pub sync_time: Option<String>,
-    pub gobgp_api_host: Option<String>,
-    pub gobgp_api_port: Option<u16>,
-    pub gobgp_nexthop_ipv4: Option<String>,
-    pub gobgp_nexthop_ipv6: Option<String>,
-    pub community_nexthop_ipv4: Option<HashMap<String, String>>,
-    pub community_nexthop_ipv6: Option<HashMap<String, String>>,
-    pub log_file: Option<String>,
-    pub snapshot_dir: Option<String>,
-    pub community_prefix: Option<String>,
-    pub concurrency: Option<usize>,
-}
-
-/// 运行时配置
-#[derive(Debug, Clone)]
-pub struct Settings {
-    pub ip_version: IpVersion,
-    pub country_code: String,
-    pub sync_time: String,
-    pub gobgp_api_host: String,
-    pub gobgp_api_port: u16,
-    pub gobgp_nexthop_ipv4: String,
-    pub gobgp_nexthop_ipv6: String,
-    pub community_nexthop_ipv4: HashMap<String, String>,
-    pub community_nexthop_ipv6: HashMap<String, String>,
-    pub log_file: String,
-    pub snapshot_dir: String,
-    pub snapshot_ipv4_file: String,
-    pub snapshot_ipv6_file: String,
-    pub community_prefix: String,
-    pub concurrency: usize,
-    pub rir_urls: HashMap<String, String>,
-    pub country_rir_map: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum IpVersion {
-    Ipv4,
-    Ipv6,
-    Dual,
-}
-
-impl IpVersion {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_uppercase().as_str() {
-            "IPV4" => IpVersion::Ipv4,
-            "IPV6" => IpVersion::Ipv6,
-            "DUAL" => IpVersion::Dual,
-            _ => {
-                log::warn!("无效的IP_VERSION: {}, 使用默认值DUAL", s);
-                IpVersion::Dual
-            }
-        }
-    }
-
-    pub fn should_process_ipv4(&self) -> bool {
-        matches!(self, IpVersion::Ipv4 | IpVersion::Dual)
-    }
-
-    pub fn should_process_ipv6(&self) -> bool {
-        matches!(self, IpVersion::Ipv6 | IpVersion::Dual)
-    }
-}
+pub use cli::CliArgs;
+pub use types::{ConfigFile, IpVersion, Settings};
 
 impl Settings {
     /// 从命令行参数和可选配置文件构建配置
@@ -159,14 +30,17 @@ impl Settings {
             gobgp_nexthop_ipv6: "::".to_string(),
             community_nexthop_ipv4: HashMap::new(),
             community_nexthop_ipv6: HashMap::new(),
+            region_nexthop_ipv4: HashMap::new(),
+            region_nexthop_ipv6: HashMap::new(),
             log_file: format!("{}/gobgp_sync.log", Self::exe_dir()),
-            snapshot_dir: Self::exe_dir(),
+            snapshot_dir: Self::default_snapshot_dir(),
             community_prefix: "3166".to_string(),
+            region_community_prefix: HashMap::new(),
             concurrency: 100,
             snapshot_ipv4_file: String::new(),
             snapshot_ipv6_file: String::new(),
             rir_urls: Self::default_rir_urls(),
-            country_rir_map: Self::default_country_rir_map(),
+            country_rir_map: CountryCodeMap::country_rir_map(),
         };
 
         // 配置文件覆盖默认值
@@ -203,6 +77,18 @@ impl Settings {
                     if let Some(v) = s.community_nexthop_ipv6 {
                         config.community_nexthop_ipv6 =
                             config.convert_country_next_hop_map(v, "IPv6");
+                    }
+                    if let Some(v) = s.region_community_prefix {
+                        config.region_community_prefix =
+                            Self::normalize_region_string_map(v, "团体字前缀", |value| {
+                                value.parse::<u16>().is_ok()
+                            });
+                    }
+                    if let Some(v) = s.region_nexthop_ipv4 {
+                        config.region_nexthop_ipv4 = Self::normalize_region_next_hop_map(v, false);
+                    }
+                    if let Some(v) = s.region_nexthop_ipv6 {
+                        config.region_nexthop_ipv6 = Self::normalize_region_next_hop_map(v, true);
                     }
                     if let Some(v) = s.log_file {
                         config.log_file = v;
@@ -254,6 +140,37 @@ impl Settings {
                 config.community_nexthop_ipv6.insert(code, next_hop);
             }
         }
+        for item in &args.region_community_prefix {
+            if let Some((region, prefix)) = Self::parse_region_item(item, "团体字前缀") {
+                let mut map = HashMap::new();
+                map.insert(region, prefix);
+                config
+                    .region_community_prefix
+                    .extend(Self::normalize_region_string_map(
+                        map,
+                        "团体字前缀",
+                        |value| value.parse::<u16>().is_ok(),
+                    ));
+            }
+        }
+        for item in &args.region_nexthop_ipv4 {
+            if let Some((region, next_hop)) = Self::parse_region_item(item, "IPv4 下一跳") {
+                let mut map = HashMap::new();
+                map.insert(region, next_hop);
+                config
+                    .region_nexthop_ipv4
+                    .extend(Self::normalize_region_next_hop_map(map, false));
+            }
+        }
+        for item in &args.region_nexthop_ipv6 {
+            if let Some((region, next_hop)) = Self::parse_region_item(item, "IPv6 下一跳") {
+                let mut map = HashMap::new();
+                map.insert(region, next_hop);
+                config
+                    .region_nexthop_ipv6
+                    .extend(Self::normalize_region_next_hop_map(map, true));
+            }
+        }
         if let Some(v) = &args.log_file {
             config.log_file = v.clone();
         }
@@ -277,6 +194,11 @@ impl Settings {
         config.snapshot_ipv6_file = format!("{}/snapshot_ipv6_routing.prefix", snap_dir);
 
         Ok(config)
+    }
+
+    /// 默认快照目录。使用系统临时目录，避免服务目录不可写或污染部署目录。
+    fn default_snapshot_dir() -> String {
+        "/tmp".to_string()
     }
 
     /// 获取二进制文件所在目录
@@ -325,13 +247,40 @@ impl Settings {
             &self.community_nexthop_ipv4
         };
 
-        overrides.get(code).cloned().unwrap_or_else(|| {
-            if is_ipv6 {
-                self.gobgp_nexthop_ipv6.clone()
-            } else {
-                self.gobgp_nexthop_ipv4.clone()
+        if let Some(next_hop) = overrides.get(code) {
+            return next_hop.clone();
+        }
+
+        let region_overrides = if is_ipv6 {
+            &self.region_nexthop_ipv6
+        } else {
+            &self.region_nexthop_ipv4
+        };
+
+        let country_map = CountryCodeMap::default();
+        if let Ok(numeric) = code.parse::<u16>() {
+            if let Some(rir) = country_map.rir_for_numeric(numeric) {
+                if let Some(next_hop) = region_overrides.get(rir) {
+                    return next_hop.clone();
+                }
             }
-        })
+        }
+
+        if is_ipv6 {
+            self.gobgp_nexthop_ipv6.clone()
+        } else {
+            self.gobgp_nexthop_ipv4.clone()
+        }
+    }
+
+    /// 使用国家/地区所属 RIR 选择 community 前缀，未配置地区前缀时回退到默认前缀。
+    pub fn community_for_country(&self, country: &str) -> Option<String> {
+        let country_map = CountryCodeMap::default();
+        let region = country_map.rir_for_country(country);
+        let prefix = region
+            .and_then(|rir| self.region_community_prefix.get(rir))
+            .unwrap_or(&self.community_prefix);
+        country_map.community(country, prefix)
     }
 
     /// 校验默认下一跳和按国家/地区覆盖的下一跳，非法值会被忽略或回退
@@ -416,6 +365,70 @@ impl Settings {
         });
     }
 
+    fn normalize_region_next_hop_map(
+        map: HashMap<String, String>,
+        is_ipv6: bool,
+    ) -> HashMap<String, String> {
+        Self::normalize_region_string_map(map, "下一跳", |value| {
+            matches!(
+                (value.parse::<IpAddr>(), is_ipv6),
+                (Ok(IpAddr::V4(_)), false) | (Ok(IpAddr::V6(_)), true)
+            )
+        })
+    }
+
+    fn parse_region_item(item: &str, value_name: &str) -> Option<(String, String)> {
+        let (region, value) = match item.split_once('=') {
+            Some(v) => v,
+            None => {
+                log::warn!(
+                    "无效的 RIR 地区{}配置: {}，应为 RIR=VALUE",
+                    value_name,
+                    item
+                );
+                return None;
+            }
+        };
+
+        Some((region.trim().to_string(), value.trim().to_string()))
+    }
+
+    fn normalize_region_string_map<F>(
+        map: HashMap<String, String>,
+        value_name: &str,
+        valid_value: F,
+    ) -> HashMap<String, String>
+    where
+        F: Fn(&str) -> bool,
+    {
+        let valid_regions: std::collections::HashSet<String> =
+            CountryCodeMap::country_rir_map().into_values().collect();
+
+        map.into_iter()
+            .filter_map(|(region, value)| {
+                let region = region.trim().to_uppercase();
+                let value = value.trim().to_string();
+
+                if !valid_regions.contains(&region) {
+                    log::warn!("忽略未知 RIR 地区配置: {}", region);
+                    return None;
+                }
+
+                if !valid_value(&value) {
+                    log::warn!(
+                        "忽略无效的 RIR 地区{}配置: {}={}",
+                        value_name,
+                        region,
+                        value
+                    );
+                    return None;
+                }
+
+                Some((region, value))
+            })
+            .collect()
+    }
+
     /// 获取需要处理的RIR列表
     pub fn get_rir_list(&self) -> Vec<String> {
         match self.country_code.as_str() {
@@ -455,69 +468,6 @@ impl Settings {
             "http://ftp.afrinic.net/pub/stats/afrinic/delegated-afrinic-extended-latest"
                 .to_string(),
         );
-        map
-    }
-
-    /// 国家/地区简写到所属 RIR 的映射，用于决定需要下载哪些 delegated 文件
-    fn default_country_rir_map() -> HashMap<String, String> {
-        let mut map = HashMap::new();
-
-        // AFRINIC
-        let afrinic_countries = [
-            "AO", "BF", "BI", "BJ", "BW", "CD", "CF", "CG", "CI", "CM", "CV", "DJ", "DZ", "EG",
-            "ER", "ET", "GA", "GH", "GM", "GN", "GQ", "GW", "KE", "KM", "LR", "LS", "LY", "MA",
-            "MG", "ML", "MR", "MU", "MW", "MZ", "NA", "NE", "NG", "RE", "RW", "SC", "SD", "SL",
-            "SN", "SO", "SS", "ST", "SZ", "TD", "TG", "TN", "TZ", "UG", "YT", "ZA", "ZM", "ZW",
-            "ZZ",
-        ];
-        for c in &afrinic_countries {
-            map.insert(c.to_string(), "AFRINIC".to_string());
-        }
-
-        // APNIC
-        let apnic_countries = [
-            "AE", "AF", "AL", "AP", "AS", "AU", "BD", "BN", "BR", "BT", "BZ", "CA", "CH", "CK",
-            "CN", "CO", "CY", "DE", "DK", "EE", "ES", "FJ", "FM", "FR", "GB", "GU", "HK", "ID",
-            "IE", "IM", "IN", "IO", "IT", "JP", "KH", "KI", "KP", "KR", "LA", "LK", "LT", "LU",
-            "MH", "MM", "MN", "MO", "MP", "MT", "MV", "MX", "MY", "NC", "NF", "NL", "NO", "NP",
-            "NR", "NU", "NZ", "PA", "PF", "PG", "PH", "PK", "PT", "PW", "RO", "RU", "SB", "SE",
-            "SG", "SI", "TH", "TK", "TL", "TO", "TR", "TV", "TW", "US", "VG", "VN", "VU", "WF",
-            "WS",
-        ];
-        for c in &apnic_countries {
-            map.insert(c.to_string(), "APNIC".to_string());
-        }
-
-        // ARIN
-        let arin_countries = [
-            "AG", "AI", "BB", "BE", "BL", "BM", "BS", "CZ", "DM", "DO", "FI", "GD", "GP", "IL",
-            "IS", "JE", "JM", "KN", "KY", "LC", "MF", "MQ", "MS", "PM", "PR", "SG", "TC", "UG",
-            "VC", "VI",
-        ];
-        for c in &arin_countries {
-            map.insert(c.to_string(), "ARIN".to_string());
-        }
-
-        // LACNIC
-        let lacnic_countries = [
-            "AR", "AW", "BO", "BQ", "CL", "CR", "CU", "CW", "EC", "GF", "GT", "GY", "HN", "HT",
-            "NI", "PE", "PY", "SR", "SV", "SX", "TT", "UY", "VE",
-        ];
-        for c in &lacnic_countries {
-            map.insert(c.to_string(), "LACNIC".to_string());
-        }
-
-        // RIPE
-        let ripe_countries = [
-            "AD", "AM", "AT", "AX", "AZ", "BA", "BG", "BH", "BY", "GE", "GI", "GL", "GR", "HR",
-            "HU", "IQ", "IR", "JO", "KG", "KW", "KZ", "LB", "LI", "LV", "MC", "MD", "ME", "MK",
-            "OM", "PL", "PS", "QA", "RS", "SA", "SK", "SM", "SY", "TJ", "TM", "UA", "UZ", "VA",
-            "YE",
-        ];
-        for c in &ripe_countries {
-            map.insert(c.to_string(), "RIPE".to_string());
-        }
-
         map
     }
 }

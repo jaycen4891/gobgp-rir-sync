@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -69,6 +70,15 @@ impl RouteManager {
         }
 
         (ok, fail)
+    }
+
+    /// 查询 GoBGP Global RIB 中当前已有的前缀。
+    pub async fn list_global_prefixes(
+        &self,
+        protocol: &str,
+        tag: &str,
+    ) -> anyhow::Result<HashSet<String>> {
+        CommandExecutor::list_global_prefixes(&self.settings, protocol == "ipv6", tag).await
     }
 
     /// 从文件加载快照，返回 (前缀→团体字) 映射

@@ -1,5 +1,262 @@
 use std::collections::HashMap;
 
+/// 国家/地区元数据。
+///
+/// `numeric` 为 ISO 3166-1 数字码；少量 RIR delegated 文件中的特殊代码
+/// （例如 AP、ZZ）没有对应 ISO 数字码，但仍可用于选择 RIR 数据源。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CountryMeta {
+    pub alpha2: &'static str,
+    pub numeric: Option<u16>,
+    pub rir: &'static str,
+}
+
+const COUNTRY_RIR_ENTRIES: &[(&str, &str)] = &[
+    // AFRINIC
+    ("AO", "AFRINIC"),
+    ("BF", "AFRINIC"),
+    ("BI", "AFRINIC"),
+    ("BJ", "AFRINIC"),
+    ("BW", "AFRINIC"),
+    ("CD", "AFRINIC"),
+    ("CF", "AFRINIC"),
+    ("CG", "AFRINIC"),
+    ("CI", "AFRINIC"),
+    ("CM", "AFRINIC"),
+    ("CV", "AFRINIC"),
+    ("DJ", "AFRINIC"),
+    ("DZ", "AFRINIC"),
+    ("EG", "AFRINIC"),
+    ("ER", "AFRINIC"),
+    ("ET", "AFRINIC"),
+    ("GA", "AFRINIC"),
+    ("GH", "AFRINIC"),
+    ("GM", "AFRINIC"),
+    ("GN", "AFRINIC"),
+    ("GQ", "AFRINIC"),
+    ("GW", "AFRINIC"),
+    ("KE", "AFRINIC"),
+    ("KM", "AFRINIC"),
+    ("LR", "AFRINIC"),
+    ("LS", "AFRINIC"),
+    ("LY", "AFRINIC"),
+    ("MA", "AFRINIC"),
+    ("MG", "AFRINIC"),
+    ("ML", "AFRINIC"),
+    ("MR", "AFRINIC"),
+    ("MU", "AFRINIC"),
+    ("MW", "AFRINIC"),
+    ("MZ", "AFRINIC"),
+    ("NA", "AFRINIC"),
+    ("NE", "AFRINIC"),
+    ("NG", "AFRINIC"),
+    ("RE", "AFRINIC"),
+    ("RW", "AFRINIC"),
+    ("SC", "AFRINIC"),
+    ("SD", "AFRINIC"),
+    ("SL", "AFRINIC"),
+    ("SN", "AFRINIC"),
+    ("SO", "AFRINIC"),
+    ("SS", "AFRINIC"),
+    ("ST", "AFRINIC"),
+    ("SZ", "AFRINIC"),
+    ("TD", "AFRINIC"),
+    ("TG", "AFRINIC"),
+    ("TN", "AFRINIC"),
+    ("TZ", "AFRINIC"),
+    ("UG", "AFRINIC"),
+    ("YT", "AFRINIC"),
+    ("ZA", "AFRINIC"),
+    ("ZM", "AFRINIC"),
+    ("ZW", "AFRINIC"),
+    ("ZZ", "AFRINIC"),
+    // APNIC
+    ("AE", "APNIC"),
+    ("AF", "APNIC"),
+    ("AL", "APNIC"),
+    ("AP", "APNIC"),
+    ("AS", "APNIC"),
+    ("AU", "APNIC"),
+    ("BD", "APNIC"),
+    ("BN", "APNIC"),
+    ("BR", "APNIC"),
+    ("BT", "APNIC"),
+    ("BZ", "APNIC"),
+    ("CA", "APNIC"),
+    ("CH", "APNIC"),
+    ("CK", "APNIC"),
+    ("CN", "APNIC"),
+    ("CO", "APNIC"),
+    ("CY", "APNIC"),
+    ("DE", "APNIC"),
+    ("DK", "APNIC"),
+    ("EE", "APNIC"),
+    ("ES", "APNIC"),
+    ("FJ", "APNIC"),
+    ("FM", "APNIC"),
+    ("FR", "APNIC"),
+    ("GB", "APNIC"),
+    ("GU", "APNIC"),
+    ("HK", "APNIC"),
+    ("ID", "APNIC"),
+    ("IE", "APNIC"),
+    ("IM", "APNIC"),
+    ("IN", "APNIC"),
+    ("IO", "APNIC"),
+    ("IT", "APNIC"),
+    ("JP", "APNIC"),
+    ("KH", "APNIC"),
+    ("KI", "APNIC"),
+    ("KP", "APNIC"),
+    ("KR", "APNIC"),
+    ("LA", "APNIC"),
+    ("LK", "APNIC"),
+    ("LT", "APNIC"),
+    ("LU", "APNIC"),
+    ("MH", "APNIC"),
+    ("MM", "APNIC"),
+    ("MN", "APNIC"),
+    ("MO", "APNIC"),
+    ("MP", "APNIC"),
+    ("MT", "APNIC"),
+    ("MV", "APNIC"),
+    ("MX", "APNIC"),
+    ("MY", "APNIC"),
+    ("NC", "APNIC"),
+    ("NF", "APNIC"),
+    ("NL", "APNIC"),
+    ("NO", "APNIC"),
+    ("NP", "APNIC"),
+    ("NR", "APNIC"),
+    ("NU", "APNIC"),
+    ("NZ", "APNIC"),
+    ("PA", "APNIC"),
+    ("PF", "APNIC"),
+    ("PG", "APNIC"),
+    ("PH", "APNIC"),
+    ("PK", "APNIC"),
+    ("PT", "APNIC"),
+    ("PW", "APNIC"),
+    ("RO", "APNIC"),
+    ("RU", "APNIC"),
+    ("SB", "APNIC"),
+    ("SE", "APNIC"),
+    ("SG", "APNIC"),
+    ("SI", "APNIC"),
+    ("TH", "APNIC"),
+    ("TK", "APNIC"),
+    ("TL", "APNIC"),
+    ("TO", "APNIC"),
+    ("TR", "APNIC"),
+    ("TV", "APNIC"),
+    ("TW", "APNIC"),
+    ("US", "APNIC"),
+    ("VG", "APNIC"),
+    ("VN", "APNIC"),
+    ("VU", "APNIC"),
+    ("WF", "APNIC"),
+    ("WS", "APNIC"),
+    // ARIN
+    ("AG", "ARIN"),
+    ("AI", "ARIN"),
+    ("BB", "ARIN"),
+    ("BE", "ARIN"),
+    ("BL", "ARIN"),
+    ("BM", "ARIN"),
+    ("BS", "ARIN"),
+    ("CZ", "ARIN"),
+    ("DM", "ARIN"),
+    ("DO", "ARIN"),
+    ("FI", "ARIN"),
+    ("GD", "ARIN"),
+    ("GP", "ARIN"),
+    ("IL", "ARIN"),
+    ("IS", "ARIN"),
+    ("JE", "ARIN"),
+    ("JM", "ARIN"),
+    ("KN", "ARIN"),
+    ("KY", "ARIN"),
+    ("LC", "ARIN"),
+    ("MF", "ARIN"),
+    ("MQ", "ARIN"),
+    ("MS", "ARIN"),
+    ("PM", "ARIN"),
+    ("PR", "ARIN"),
+    ("SG", "ARIN"),
+    ("TC", "ARIN"),
+    ("UG", "ARIN"),
+    ("VC", "ARIN"),
+    ("VI", "ARIN"),
+    // LACNIC
+    ("AR", "LACNIC"),
+    ("AW", "LACNIC"),
+    ("BO", "LACNIC"),
+    ("BQ", "LACNIC"),
+    ("CL", "LACNIC"),
+    ("CR", "LACNIC"),
+    ("CU", "LACNIC"),
+    ("CW", "LACNIC"),
+    ("EC", "LACNIC"),
+    ("GF", "LACNIC"),
+    ("GT", "LACNIC"),
+    ("GY", "LACNIC"),
+    ("HN", "LACNIC"),
+    ("HT", "LACNIC"),
+    ("NI", "LACNIC"),
+    ("PE", "LACNIC"),
+    ("PY", "LACNIC"),
+    ("SR", "LACNIC"),
+    ("SV", "LACNIC"),
+    ("SX", "LACNIC"),
+    ("TT", "LACNIC"),
+    ("UY", "LACNIC"),
+    ("VE", "LACNIC"),
+    // RIPE
+    ("AD", "RIPE"),
+    ("AM", "RIPE"),
+    ("AT", "RIPE"),
+    ("AX", "RIPE"),
+    ("AZ", "RIPE"),
+    ("BA", "RIPE"),
+    ("BG", "RIPE"),
+    ("BH", "RIPE"),
+    ("BY", "RIPE"),
+    ("GE", "RIPE"),
+    ("GI", "RIPE"),
+    ("GL", "RIPE"),
+    ("GR", "RIPE"),
+    ("HR", "RIPE"),
+    ("HU", "RIPE"),
+    ("IQ", "RIPE"),
+    ("IR", "RIPE"),
+    ("JO", "RIPE"),
+    ("KG", "RIPE"),
+    ("KW", "RIPE"),
+    ("KZ", "RIPE"),
+    ("LB", "RIPE"),
+    ("LI", "RIPE"),
+    ("LV", "RIPE"),
+    ("MC", "RIPE"),
+    ("MD", "RIPE"),
+    ("ME", "RIPE"),
+    ("MK", "RIPE"),
+    ("OM", "RIPE"),
+    ("PL", "RIPE"),
+    ("PS", "RIPE"),
+    ("QA", "RIPE"),
+    ("RS", "RIPE"),
+    ("SA", "RIPE"),
+    ("SK", "RIPE"),
+    ("SM", "RIPE"),
+    ("SY", "RIPE"),
+    ("TJ", "RIPE"),
+    ("TM", "RIPE"),
+    ("UA", "RIPE"),
+    ("UZ", "RIPE"),
+    ("VA", "RIPE"),
+    ("YE", "RIPE"),
+];
+
 /// ISO 3166-1 二位字母国家/地区代码到三位数字码的映射
 ///
 /// 用于生成 `<团体字前缀>:<数字码>` 格式的标准团体字，例如中国为 `3166:156`
@@ -16,6 +273,42 @@ impl CountryCodeMap {
     /// 生成 `<团体字前缀>:<数字码>` 格式的团体字
     pub fn community(&self, code: &str, prefix: &str) -> Option<String> {
         self.get(code).map(|n| format!("{}:{}", prefix, n))
+    }
+
+    /// 查询国家/地区的完整元数据。
+    pub fn metadata_for_country(&self, code: &str) -> Option<CountryMeta> {
+        let code = code.trim().to_uppercase();
+        COUNTRY_RIR_ENTRIES.iter().rev().find_map(|(country, rir)| {
+            (*country == code).then_some(CountryMeta {
+                alpha2: country,
+                numeric: self.get(country),
+                rir,
+            })
+        })
+    }
+
+    /// 查询国家/地区二位字母代码所属的 RIR 区域。
+    pub fn rir_for_country(&self, code: &str) -> Option<&'static str> {
+        self.metadata_for_country(code).map(|meta| meta.rir)
+    }
+
+    /// 根据 ISO 3166-1 数字码查询所属的 RIR 区域。
+    pub fn rir_for_numeric(&self, numeric: u16) -> Option<&'static str> {
+        self.map
+            .iter()
+            .find_map(|(country, code)| {
+                (*code == numeric).then(|| self.metadata_for_country(country))
+            })
+            .flatten()
+            .map(|meta| meta.rir)
+    }
+
+    /// 返回国家/地区二位字母代码到 RIR 的映射。
+    pub fn country_rir_map() -> HashMap<String, String> {
+        COUNTRY_RIR_ENTRIES
+            .iter()
+            .map(|(country, rir)| ((*country).to_string(), (*rir).to_string()))
+            .collect()
     }
 }
 
