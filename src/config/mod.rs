@@ -450,22 +450,27 @@ impl Settings {
         map.insert(
             "APNIC".to_string(),
             "http://ftp.apnic.net/stats/apnic/delegated-apnic-extended-latest".to_string(),
+            // "http://ftp.apnic.net/stats/apnic/delegated-apnic-extended-latest".to_string(),
         );
         map.insert(
             "ARIN".to_string(),
-            "http://ftp.arin.net/pub/stats/arin/delegated-arin-extended-latest".to_string(),
+            "http://ftp.apnic.net/stats/arin/delegated-arin-extended-latest".to_string(),
+            // "http://ftp.arin.net/pub/stats/arin/delegated-arin-extended-latest".to_string(),
         );
         map.insert(
             "RIPE".to_string(),
-            "http://ftp.ripe.net/ripe/stats/delegated-ripencc-extended-latest".to_string(),
+            "http://ftp.apnic.net/stats/ripe-ncc/delegated-ripencc-extended-latest".to_string(),
+            // "http://ftp.ripe.net/ripe/stats/delegated-ripencc-extended-latest".to_string(),
         );
         map.insert(
             "LACNIC".to_string(),
-            "http://ftp.lacnic.net/pub/stats/lacnic/delegated-lacnic-extended-latest".to_string(),
+            "http://ftp.apnic.net/stats/lacnic/delegated-lacnic-extended-latestt".to_string(),
+            // "http://ftp.lacnic.net/pub/stats/lacnic/delegated-lacnic-extended-latest".to_string(),
         );
         map.insert(
             "AFRINIC".to_string(),
-            "http://ftp.afrinic.net/pub/stats/afrinic/delegated-afrinic-extended-latest"
+            "http://ftp.apnic.net/stats/afrinic/delegated-afrinic-latest"
+            // "http://ftp.afrinic.net/pub/stats/afrinic/delegated-afrinic-extended-latest"
                 .to_string(),
         );
         map
